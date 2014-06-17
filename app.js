@@ -9,6 +9,41 @@ var express = require('express')
   , artemisNet = require('./artemisNet')
   , artemisModel = require('./public/javascripts/worldmodel');
 
+
+//Lifx
+var lifx = require('./lifxjs/lifx');
+var util = require('util');
+var packet = require('./lifxjs/packet');
+var spawn = require('child_process').spawn
+var playerCh1 = null;
+var playerCh2 = null;
+
+
+lifx.setDebug(false);
+var lx = lifx.init();
+
+var alertIsBright = false;
+var alertIsOn = false;
+
+
+
+var alertIntervalMsec = 1000;
+
+var alertFunction = function(){
+	if(alertIsOn){
+		if(alertIsBright){
+			lx.lightsColour(0x0000, 0xffff, 0x1000, 0, alertIntervalMsec);
+			
+		}else{
+			lx.lightsColour(0x0000, 0xffff, 0x8000, 0, alertIntervalMsec);
+			
+		}
+		alertIsBright = !alertIsBright;
+	}
+}
+var alertTimerRef = setInterval(alertFunction, 1000);
+
+
 var app = module.exports = express();
 
 var tcpPort = 3000;
@@ -73,6 +108,8 @@ artemisNet.on('disconnected', function(){
 	io.sockets.emit('disconnected');
 });
 
+
+
 function grabStations() {
 	/// FIXME!!! This is the console selection code, and perhaps should not
 	///   be placed here.
@@ -98,6 +135,66 @@ artemisNet.on('welcome', function(){
 });
 
 
+artemisNet.on('playerShipDamage',function(data){
+	lx.lightsColour(39072, 0xffff, 0x8000, 0, 100);
+	setTimeout(function(){
+		lx.lightsColour(39072, 0xffff, 0x4000, 0x0af0, 90);
+	},100);
+	setTimeout(function(){
+		lx.lightsColour(39072, 0xffff, 0x3000, 0x0af0, 90);
+	},200);
+	setTimeout(function(){
+		lx.lightsColour(39072, 0xffff, 0x8000, 0x0af0, 90);
+	},300);
+});
+
+
+artemisNet.on('playerUpdate',function(data) {
+	//console.log(data.shieldState)
+	if(data.shieldState === 1){
+		console.log("Shields UP!");
+		lx.lightsColour(39072, 0xffff, 0x8000, 0, 0x0513);
+
+	}else if(data.shieldState === 0){
+		console.log("Shields DOWN!");
+		lx.lightsColour(37836, 0x4fff, 0x1000, 0x0af0, 0x0513);
+	}
+
+	if (data.hasOwnProperty('redAlert')) {
+		
+
+		if (data.redAlert) {
+			console.log("RED ALERT!");
+			if(playerCh1 != null){
+				playerCh1.kill();
+				playerCh1 = null;
+			}
+			if(playerCh2 != null){
+				playerCh2.kill();
+				playerCh2 = null;
+			}
+			playerCh1 = spawn("vlc",["codered.ogg","-R"]);
+			playerCh2 = spawn("vlc",["alarm.mp3","-R"]);
+			alertIsOn = true;
+		} else {
+			if(alertIsOn){
+				console.log("NO ALERT!");
+				alertIsOn = false;
+				console.log("RedAlert Off");
+				if(playerCh1 != null){
+					playerCh1.kill();
+					playerCh1 = null;
+				}
+				if(playerCh2 != null){
+					playerCh2.kill();
+					playerCh2 = null;
+				}
+				lx.lightsColour(0x0000, 0x0000, 0x8000, 0x0af0, 0x0513);
+			}
+		}
+	}
+	
+});
 
 // Functionality for connecting/disconnecting to/from the server
 //   and knowing our own public IP address (which is different from
@@ -169,5 +266,5 @@ if (autoConnect) {
 
 // Once everything's ready, try open the default browser with the main page.
 if (!headless) {
-	opener('http://localhost:' + tcpPort);
+	opener('http://10.0.0.42:' + tcpPort);
 }
