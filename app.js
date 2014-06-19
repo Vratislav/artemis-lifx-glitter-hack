@@ -18,25 +18,156 @@ var spawn = require('child_process').spawn
 var playerCh1 = null;
 var playerCh2 = null;
 
+var currentLight = null;
+
+
+//Light states
+var artemisLight = function(){};
+
+artemisLight.prototype.clone = function(){
+	var newLight = new artemisLight();
+	newLight.hue = this.hue;
+	newLight.sat = this.sat;
+	newLight.lum = this.lum;
+	newLight.temp = this.temp;
+	return newLight;
+}
+
+artemisLight.prototype.isEqualLight = function(otherLight){
+	if(this.hue == otherLight.hue && this.sat == otherLight.sat && this.lum == otherLight.lum){
+		return true;
+	}
+	return false;
+}
+
+artemisLight.prototype.apply = function(fadeTime,overrideCheck){
+	if(fadeTime === undefined){
+		fadeTime = 0;
+	}
+	if(overrideCheck === undefined){
+		overrideCheck = false;
+	}
+	if(overrideCheck || currentLight == null || !this.isEqualLight(currentLight)){
+		console.log("Lights to Hue:"+this.hue + " Sat:" + this.sat + " Lum:" + this.lum + " Temp:" + this.temp + " Fade:" + fadeTime);
+		lx.lightsColour(this.hue, this.sat, this.lum, this.temp, fadeTime);
+		
+	}else{
+		console.log("Lights did not change");
+	}
+	currentLight = this;
+}
+
+var defaultLightState = new artemisLight();
+defaultLightState.hue = 37836;
+defaultLightState.sat = 0x4fff;
+defaultLightState.lum = 0x1000;
+defaultLightState.temp = 0x0af0;
+
+
+
+var shieldLight = new artemisLight();
+shieldLight.hue = 39072;
+shieldLight.sat = 0xffff;
+shieldLight.lum = 0x8000;
+shieldLight.temp = 0;
+
+
+var redAlertDimLight = new artemisLight();
+redAlertDimLight.hue = 0x0000;
+redAlertDimLight.sat = 0xffff;
+redAlertDimLight.lum = 0x8000;
+redAlertDimLight.temp = 0;
+
+var redAlertBrightLight= new artemisLight();
+redAlertBrightLight.hue = 0x0000;
+redAlertBrightLight.sat = 0xffff;
+redAlertBrightLight.lum = 0x1000;
+redAlertBrightLight.temp = 0;
+
+var lightState;
+
+
+
 
 lifx.setDebug(false);
 var lx = lifx.init();
 
+var firstUpdate = true;
 var alertIsBright = false;
 var alertIsOn = false;
+var shieldsAreUp = false;
+var shieldPower = 80;
+var maxShieldPower = 80;
+var subsystems = {};
+var shipDamage = 0;
+
+var clearGameState = function(){
+	firstUpdate = true;
+	alertIsBright = false;
+	alertIsOn = false;
+	shieldsAreUp = false;
+	shieldPower = 80;
+	maxShieldPower = 80;
+	subsystems = {};
+	shipDamage = 0;
+}
 
 
 
 var alertIntervalMsec = 1000;
 
-var alertFunction = function(){
-	if(alertIsOn){
-		if(alertIsBright){
-			lx.lightsColour(0x0000, 0xffff, 0x1000, 0, alertIntervalMsec);
-			
+
+var applyCurrentStateLight = function(fadeTime,overrideCheck){
+	var stateLight = null;
+
+	if(!alertIsOn){
+		if(shieldsAreUp && shieldPower >= 1){
+			stateLight = shieldLight.clone();
+
+			stateLight.lum = Math.round(stateLight.lum*(shieldPower/maxShieldPower));
+
 		}else{
-			lx.lightsColour(0x0000, 0xffff, 0x8000, 0, alertIntervalMsec);
-			
+			stateLight = defaultLightState.clone();
+			if(shipDamage < 0.10){
+
+			}
+			else if(shipDamage > 0.10 && shipDamage <= 0.30){
+				stateLight.lum = 0x0400;
+			}else if(shipDamage > 0.3 && shipDamage <= 0.50){
+				stateLight = redAlertBrightLight.clone();
+			}else if(shipDamage > 0.5 && shipDamage <= 0.75){
+				stateLight = redAlertDimLight.clone();
+			}else{
+				if(playerCh2 == null && !alertIsOn){
+					playerCh2 = spawn("vlc",["alarm.mp3","-R","--qt-start-minimized","--qt-notification=0"]);
+				}
+				return;
+				//red alert
+			}
+			if(shipDamage <= 0.75 && !alertIsOn && playerCh2 != null){
+				playerCh2.kill();
+				playerCh2 = null;
+			}
+		}
+
+		stateLight.apply(fadeTime,overrideCheck);
+	}
+
+}
+
+lx.on('bulb', function(b) {
+	console.log("New bulb found. Reapplying lights");
+	applyCurrentStateLight(100,true);
+});
+
+var alertFunction = function(){
+	if(alertIsOn || shipDamage > 0.75){
+		if(alertIsBright){
+			redAlertDimLight.apply(alertIntervalMsec);
+			//lx.lightsColour(0x0000, 0xffff, 0x8000, 0, alertIntervalMsec);
+		}else{
+			//lx.lightsColour(0x0000, 0xffff, 0x1000, 0, alertIntervalMsec);
+			redAlertBrightLight.apply(alertIntervalMsec);
 		}
 		alertIsBright = !alertIsBright;
 	}
@@ -134,32 +265,82 @@ artemisNet.on('welcome', function(){
 	grabStations();
 });
 
+artemisNet.on('damcon',function(data){
+	console.log("Subsystem count " + data.nodes.length);
+	for(var i = 0; i < data.nodes.length; i++ ){
+		var node = data.nodes[i];
+		subsystems[":" + node.x + ":" + node.y +":"+node.z] = node;
 
-artemisNet.on('playerShipDamage',function(data){
-	lx.lightsColour(39072, 0xffff, 0x8000, 0, 100);
-	setTimeout(function(){
-		lx.lightsColour(39072, 0xffff, 0x4000, 0x0af0, 90);
-	},100);
-	setTimeout(function(){
-		lx.lightsColour(39072, 0xffff, 0x3000, 0x0af0, 90);
-	},200);
-	setTimeout(function(){
-		lx.lightsColour(39072, 0xffff, 0x8000, 0x0af0, 90);
-	},300);
+		console.log("Dammage tu subsystem: " + data.nodes[i].damage);
+	}
+	var curDam = 0;
+	for (var nodeKey in subsystems) {
+  		var node = subsystems[nodeKey];
+  		curDam += node.damage;
+	}	
+	console.log("CurDam " + curDam );
+	if(curDam > 0){
+		shipDamage = curDam/15;
+		if(shipDamage > 1){
+			shipDamage = 1;
+		}
+	}else{
+		shipDamage = 0;
+	}
+	console.log("Current ship damage:" + shipDamage );
+
 });
 
 
+artemisNet.on('playerShipDamage',function(data){
+
+	var l;
+	if(currentLight != null){
+		l = currentLight.clone();
+	}else{
+		l = defaultLightState.clone();
+	}
+	l.lum = 0x8000;
+	l.apply(100,true);
+	//lx.lightsColour(39072, 0xffff, 0x8000, 0, 100);
+	setTimeout(function(){
+		l.lum = 0x4000;
+		l.apply(90,true);
+		//lx.lightsColour(39072, 0xffff, 0x4000, 0x0af0, 90);
+	},100);
+	setTimeout(function(){
+		l.lum = 0x3000;
+		l.apply(90,true);
+		//lx.lightsColour(39072, 0xffff, 0x3000, 0x0af0, 90);
+	},200);
+	setTimeout(function(){
+		//l.lum = 0x8000;
+		applyCurrentStateLight(90);
+		//lx.lightsColour(39072, 0xffff, 0x8000, 0x0af0, 90);
+	},300);
+});
+
+var shieldUpdateTicker = 0;
+
+artemisNet.on('gameOver',function(data){
+	clearGameState();
+	console.log("Clearing game state becouse of game over");
+});
+
 artemisNet.on('playerUpdate',function(data) {
 	//console.log(data.shieldState)
-	if(data.shieldState === 1){
-		console.log("Shields UP!");
-		lx.lightsColour(39072, 0xffff, 0x8000, 0, 0x0513);
-
-	}else if(data.shieldState === 0){
-		console.log("Shields DOWN!");
-		lx.lightsColour(37836, 0x4fff, 0x1000, 0x0af0, 0x0513);
+	if(data.forShields != undefined){
+		shieldPower = data.forShields;
+		if(shieldUpdateTicker > 10){
+			applyCurrentStateLight(0);
+			shieldUpdateTicker = 0;
+		}
+		shieldUpdateTicker++;
 	}
-
+	if(data.forShieldsMax != undefined){
+		maxShieldPower = data.forShieldsMax;
+	}
+	
 	if (data.hasOwnProperty('redAlert')) {
 		
 
@@ -173,8 +354,8 @@ artemisNet.on('playerUpdate',function(data) {
 				playerCh2.kill();
 				playerCh2 = null;
 			}
-			playerCh1 = spawn("vlc",["codered.ogg","-R"]);
-			playerCh2 = spawn("vlc",["alarm.mp3","-R"]);
+			playerCh1 = spawn("vlc",["codered.ogg","-R","--qt-start-minimized","--qt-notification=0"]);
+			playerCh2 = spawn("vlc",["alarm.mp3","-R","--qt-start-minimized","--qt-notification=0"]);
 			alertIsOn = true;
 		} else {
 			if(alertIsOn){
@@ -189,10 +370,33 @@ artemisNet.on('playerUpdate',function(data) {
 					playerCh2.kill();
 					playerCh2 = null;
 				}
-				lx.lightsColour(0x0000, 0x0000, 0x8000, 0x0af0, 0x0513);
+				applyCurrentStateLight(0x0513);
+				//lx.lightsColour(0x0000, 0x0000, 0x8000, 0x0af0, 0x0513);
 			}
 		}
+	}else{
+		if(data.shieldState === 1){
+			console.log("Shields UP!");
+			shieldsAreUp = true;
+			//lx.lightsColour(39072, 0xffff, 0x8000, 0, 0x0513);
+			applyCurrentStateLight(0x0513);
+			//shieldLight.apply( 0x0513);
+
+		}else if(data.shieldState === 0){
+			console.log("Shields DOWN!");
+			shieldsAreUp = false;
+			//lx.lightsColour(37836, 0x4fff, 0x1000, 0x0af0, 0x0513);
+			applyCurrentStateLight(0x0513);
+			//defaultLightState.apply( 0x0513);
+		}
 	}
+
+	if(firstUpdate){
+		console.log("Initiating lights on first update");
+		applyCurrentStateLight(0x0513);
+		firstUpdate = false;
+	}
+	
 	
 });
 
@@ -266,5 +470,5 @@ if (autoConnect) {
 
 // Once everything's ready, try open the default browser with the main page.
 if (!headless) {
-	opener('http://10.0.0.42:' + tcpPort);
+	//opener('http://localhost:' + tcpPort);
 }
